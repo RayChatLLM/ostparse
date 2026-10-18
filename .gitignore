@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+*.ostidx/
+.DS_Store
