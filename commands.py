@@ -69,6 +69,7 @@ SUBCOMMANDS = (
     "show",
     "export",
     "stats",
+    "digest",
     "help",
 )
 
@@ -481,6 +482,63 @@ def _cmd_stats(state: Mapping[str, object], cancel: Callable[[], None] | None) -
         )
 
 
+def _cmd_digest(
+    rest: str,
+    state: Mapping[str, object],
+    cfg: Mapping[str, object],
+    cancel: Callable[[], None] | None,
+) -> str:
+    """Grounded mailbox overview: facet counts plus recent messages with their
+    real nid and a real body excerpt, so a caller can describe the mailbox from
+    actual data instead of guessing from subjects or inventing identifiers.
+    """
+    from .ostparse.search import Searcher, parse
+
+    text, opts, err = _extract_flags(rest)
+    if err:
+        return err
+    sample = _opt_int(opts, "limit", 15)
+    with _open_ost(state) as ost:
+        ix, _action = _ensure_index(ost, cfg, cancel)
+        try:
+            searcher = Searcher(ix, workers=1)
+            profile = searcher.search(parse("*"), limit=1, sort="date", exact=True)
+            lines = ["MAILBOX DIGEST — %s messages total" % profile.total]
+            for kind, label in (
+                ("folder", "Folders (message counts)"),
+                ("from", "Top senders"),
+                ("domain", "Sender domains (spot bulk/newsletter senders)"),
+                ("month", "Busiest months"),
+            ):
+                if profile.docs is None:
+                    break
+                facs = searcher.facets(profile.docs, kind, top=8)
+                if facs:
+                    lines.append("\n%s:" % label)
+                    lines.extend("  %6d  %s" % (count, value) for value, count in facs)
+            res = searcher.search(parse("kind:email"), limit=max(1, sample), sort="date", exact=True)
+            lines.append(
+                "\n%d most recent emails — each line is a REAL nid and a REAL body excerpt; "
+                "quote these (and open others with 'show NID'), never invent a nid:" % len(res.hits)
+            )
+            for hit in res.hits:
+                if cancel is not None:
+                    cancel()
+                try:
+                    body = " ".join((ost.message(hit.nid).body_text() or "").split())[:280]
+                except OSTError:
+                    body = ""
+                lines.append(
+                    "  nid=0x%x | %s | %s | %s"
+                    % (hit.nid, hit.date_str, (hit.sender or "-")[:40], (hit.subject or "(no subject)")[:70])
+                )
+                if body:
+                    lines.append("      " + body)
+            return "\n".join(lines)
+        finally:
+            ix.close()
+
+
 def run(
     arguments: str,
     settings: Mapping[str, object] | None = None,
@@ -529,6 +587,8 @@ def run(
             return _cmd_export(rest, state, cfg, cancel)
         if sub == "stats":
             return _cmd_stats(state, cancel)
+        if sub == "digest":
+            return _cmd_digest(rest, state, cfg, cancel)
     except _NoFile:
         return "no OST/PST is open in this session — use: open /absolute/path/to/mailbox.ost"
     except FileNotFoundError as exc:
