@@ -27,6 +27,40 @@ if _PKG not in sys.modules:
     _spec.loader.exec_module(_module)
 
 commands = importlib.import_module(f"{_PKG}.commands")
+messaging = importlib.import_module(f"{_PKG}.ostparse.messaging")
+errors = importlib.import_module(f"{_PKG}.ostparse.errors")
+
+
+class OpenPasswordTests(unittest.TestCase):
+    """Opening a password-gated store must never require a password.
+
+    The PidTagPstPassword CRC never encrypts the data, so OSTFile — used both
+    by the plugin and directly by agent-generated Python — reads a gated store
+    without a password and only rejects a supplied password that is wrong.
+    """
+
+    def _stub(self, stored_crc):
+        stub = messaging.OSTFile.__new__(messaging.OSTFile)
+        stub.password_protected = False
+        stub.message_store = lambda: {0x67FF: stored_crc}  # PR_PST_PASSWORD
+        return stub
+
+    def test_missing_password_never_raises_on_gated_store(self):
+        stub = self._stub(0xE61EB50F)
+        stub._check_password(None, False)  # must not raise
+        self.assertTrue(stub.password_protected)
+        # kept importable for API compatibility, even though it is never raised
+        self.assertTrue(hasattr(errors, "PasswordRequired"))
+
+    def test_wrong_password_still_rejected(self):
+        stub = self._stub(0xE61EB50F)
+        with self.assertRaises(errors.WrongPassword):
+            stub._check_password("definitely-wrong", False)
+
+    def test_ungated_store_is_not_marked_protected(self):
+        stub = self._stub(0)
+        stub._check_password(None, False)
+        self.assertFalse(stub.password_protected)
 
 
 class CommandOutputTests(unittest.TestCase):

@@ -442,11 +442,12 @@ class OSTFile:
     Parameters
     ----------
     password:
-        The PST/OST password (``PidTagPstPassword``).  Only checked, never
-        used for decryption - the format stores a CRC of it and leaves the
-        data untouched.  :class:`PasswordRequired` is raised when the store
-        has one and none was given; :class:`WrongPassword` when it does not
-        match.  ``ignore_password=True`` skips the check (forensic use).
+        The PST/OST password (``PidTagPstPassword``).  Only ever a CRC check,
+        never used for decryption - the format stores a CRC of it and leaves
+        the data untouched, so it never blocks reading.  Opening never requires
+        a password: when one is supplied it is verified and :class:`WrongPassword`
+        is raised on a mismatch; when none is supplied the store is read
+        regardless.  ``ignore_password=True`` skips even the mismatch check.
     key / decryptor / decryptor_spec:
         For ``bCryptMethod = 0x10`` (Windows Information Protection) files
         whose blocks are real ciphertext.  Either pass a ready ``decryptor``
@@ -477,10 +478,12 @@ class OSTFile:
             return
         stored &= 0xFFFFFFFF
         self.password_protected = bool(stored)
-        if not stored or ignore:
+        # The PidTagPstPassword CRC never encrypts the data, so a missing
+        # password must never block reading (that only confused callers and
+        # agents driving OSTFile directly).  Verify a supplied password, but
+        # never require one.
+        if not stored or ignore or password is None:
             return
-        if password is None:
-            raise PasswordRequired("this file is password-protected (PidTagPstPassword is set)")
         if not check_password(password, stored):
             raise WrongPassword("the supplied password does not match PidTagPstPassword")
 
