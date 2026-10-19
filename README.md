@@ -51,7 +51,7 @@ with `/plugins disable|enable|uninstall ostparse`.
 | `index [rebuild]` | Build or incrementally update the sidecar index `FILE.ostidx` |
 | `search QUERY [--limit N --offset N --sort KEY --facet KIND --exact --json --no-snippets]` | Full-text search; one numbered line per hit ending in `nid=0x...` |
 | `count QUERY` | Exact number of matches |
-| `show NID [--full] [--headers]` | One message: addresses, attachments, body (clipped unless `--full`) |
+| `show NID [--full] [--headers]` | One message: addresses, attachments, complete available text body (`--full` remains accepted) |
 | `export DIR QUERY [--limit N]` | Write matching messages as RFC 5322 `.eml` files |
 | `stats` | Walk the whole store: folder/message/attachment totals |
 | `help` / `help query` | Usage / full query-language reference |
@@ -64,9 +64,14 @@ phrases, wildcards, boolean `OR NOT -term ()`, dates
 `messageclass:` and `nid:0x...`.
 
 Settings (manifest defaults, override with `plugins.settings.ostparse`):
-`limit` (hits per page, 20), `body_chars` (show clip, 2000), `workers`
-(index-build processes, 1), `export_cap` (200), `max_chars` (output clip,
-16000), `tree_lines` (400).
+`limit` (hits per page, 20), `workers` (index-build processes, 1), and
+`export_cap` (200).
+
+Command output is never clipped or trimmed. `search --json` returns one intact
+JSON document for the requested page. Use `--limit` and `--offset` to page through
+results; snippets remain search previews, not full message bodies. `show` returns
+the complete available text body, and `tree` includes every folder. Legacy
+`max_chars`, `body_chars`, and `tree_lines` settings are accepted but ignored.
 
 Notes for operators: no password is ever needed. An OST/PST "open password"
 (`PidTagPstPassword`) is only a weak CRC-32 that gates Outlook's own UI — it

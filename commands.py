@@ -74,11 +74,8 @@ SUBCOMMANDS = (
 
 DEFAULTS: dict[str, object] = {
     "limit": 20,
-    "body_chars": 2000,
     "workers": 1,
     "export_cap": 200,
-    "max_chars": 16000,
-    "tree_lines": 400,
 }
 
 _SORT_KEYS = ("date", "oldest", "size", "relevance", "subject", "from")
@@ -144,13 +141,6 @@ def _human_size(n: object) -> str:
             return ("%d%s" if unit == "B" else "%.1f%s") % (v, unit)
         v /= 1024.0
     return "-"
-
-
-def _clip(text: str, cfg: Mapping[str, object]) -> str:
-    cap = _int_setting(cfg, "max_chars")
-    if cap and len(text) > cap:
-        return text[:cap] + f"\n... output clipped at {cap} of {len(text)} characters; narrow the request or page with --limit/--offset."
-    return text
 
 
 def _open_ost(state: Mapping[str, object]) -> OSTFile:
@@ -273,7 +263,6 @@ def _cmd_info(state: Mapping[str, object]) -> str:
 
 
 def _cmd_tree(state: Mapping[str, object], cfg: Mapping[str, object], cancel: Callable[[], None] | None) -> str:
-    cap = _int_setting(cfg, "tree_lines")
     lines: list[str] = []
     folders = messages = 0
     with _open_ost(state) as ost:
@@ -283,10 +272,7 @@ def _cmd_tree(state: Mapping[str, object], cfg: Mapping[str, object], cancel: Ca
             n = folder.message_count()
             folders += 1
             messages += n
-            if len(lines) < cap:
-                lines.append("%s%s  [%d msgs]  nid=0x%x" % ("  " * depth, folder.name or "<root>", n, folder.nid))
-            elif len(lines) == cap:
-                lines.append(f"... more folders omitted after {cap} lines; use search folder:NAME")
+            lines.append("%s%s  [%d msgs]  nid=0x%x" % ("  " * depth, folder.name or "<root>", n, folder.nid))
     lines.append(f"{folders} folders, {messages} messages")
     return "\n".join(lines)
 
@@ -416,17 +402,10 @@ def _cmd_show(rest: str, state: Mapping[str, object], cfg: Mapping[str, object])
         if opts.get("headers"):
             headers = msg.transport_headers or "(no transport headers)"
             lines.append("--- transport headers ---")
-            lines.append(headers.strip())
+            lines.append(headers)
         body = msg.body_text() or msg.body or ""
-        cap = _int_setting(cfg, "body_chars")
         lines.append("--- body ---")
-        if not body:
-            lines.append("(empty)")
-        elif opts.get("full") or len(body) <= cap:
-            lines.append(body.strip())
-        else:
-            lines.append(body[:cap].strip())
-            lines.append(f"... body clipped at {cap} of {len(body)} characters — 'show 0x{nid:x} --full' for all of it")
+        lines.append(body if body else "(empty)")
         return "\n".join(lines)
 
 
@@ -505,7 +484,11 @@ def run(
     state: MutableMapping[str, object] | None = None,
     cancel: Callable[[], None] | None = None,
 ) -> str:
-    """Execute one subcommand string and return display text."""
+    """Return complete command output, including intact JSON for search --json.
+
+    Search pages are bounded by --limit/--offset, never by character slicing.
+    Legacy max_chars, body_chars and tree_lines settings are ignored.
+    """
     cfg: dict[str, object] = dict(DEFAULTS)
     cfg.update(settings or {})
     if state is None:
@@ -530,15 +513,15 @@ def run(
         if sub == "info":
             return _cmd_info(state)
         if sub == "tree":
-            return _clip(_cmd_tree(state, cfg, cancel), cfg)
+            return _cmd_tree(state, cfg, cancel)
         if sub == "index":
             return _cmd_index(rest, state, cfg, cancel)
         if sub == "search":
-            return _clip(_cmd_search(rest, state, cfg, cancel), cfg)
+            return _cmd_search(rest, state, cfg, cancel)
         if sub == "count":
             return _cmd_search(rest, state, cfg, cancel, count_only=True)
         if sub == "show":
-            return _clip(_cmd_show(rest, state, cfg), cfg)
+            return _cmd_show(rest, state, cfg)
         if sub == "export":
             return _cmd_export(rest, state, cfg, cancel)
         if sub == "stats":
