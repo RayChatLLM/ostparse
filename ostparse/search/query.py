@@ -735,7 +735,12 @@ class Parser:
         t = self.peek()
         if t.kind == "phrase":
             self.take()
-            s, e = self.dates.interval(t.value)
+            try:
+                s, e = self.dates.interval(t.value)
+            except QueryError:
+                raise
+            except ValueError as exc:
+                raise self.error("%s: %s" % (kind, exc), t) from exc
             return DateRange(kind, s, e)
         if t.kind != "word":
             raise self.error("%s: needs a date" % kind)
@@ -750,7 +755,12 @@ class Parser:
                 words.append(self.take().value)
         elif low in MONTHS and self.peek().kind == "word" and re.match(r"^\d{4}$", self.peek().value):
             words.append(self.take().value)
-        s, e = self.dates.interval(" ".join(words))
+        try:
+            s, e = self.dates.interval(" ".join(words))
+        except QueryError:
+            raise
+        except ValueError as exc:
+            raise self.error("%s: %s" % (kind, exc), t) from exc
         return DateRange(kind, s, e)
 
     # -- leaf construction -------------------------------------------------------

@@ -19,7 +19,16 @@ WORD_RE = re.compile(r"\w+", re.UNICODE)
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", re.UNICODE)
 MAX_TOKEN_LEN = 64
 
-_TAG_RE = re.compile(r"<(script|style)\b.*?</\1\s*>|<[^>]+>", re.I | re.S)
+# Match real HTML constructs only. Requiring a letter (or !/ /) right after "<"
+# leaves stray maths/code brackets like "price < 100" and "a > b" in the text,
+# instead of deleting everything up to the next ">".
+_TAG_RE = re.compile(
+    r"<(script|style|title)\b[^>]*>.*?</\1\s*>"  # these elements, content and all
+    r"|<!--.*?-->"                                # comments (may themselves contain ">")
+    r"|</?[a-zA-Z][^>]*>"                          # ordinary start/end tags
+    r"|<![^>]*>",                                  # doctype / declarations
+    re.I | re.S,
+)
 _WS_RE = re.compile(r"[ \t\r\f\v]+")
 _NL_RE = re.compile(r"\n{3,}")
 

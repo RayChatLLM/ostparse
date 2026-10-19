@@ -76,15 +76,27 @@ def rtf_to_text(rtf: bytes) -> str:
     skip_depth = 0
     depth = 0
     pos = 0
+    # A \uN unicode run is followed by `uc` fallback "characters" (an ANSI \'xx
+    # escape or a literal byte) that must be dropped, else every smart quote,
+    # dash and accented letter that Outlook writes as \uN\'xx is doubled.
+    uc = 1
+    uskip = 0
     skip_groups = {b"fonttbl", b"colortbl", b"stylesheet", b"info", b"pict", b"object",
                    b"htmltag", b"mhtmltag", b"fldinst", b"generator", b"themedata", b"colorschememapping"}
     for m in _RTF_TOKEN.finditer(rtf):
         start = m.start()
         if start > pos and skip_depth == 0:
-            out.append(rtf[pos:start].decode("latin-1"))
+            seg = rtf[pos:start]
+            if uskip > 0:
+                take = min(uskip, len(seg))
+                uskip -= take
+                seg = seg[take:]
+            if seg:
+                out.append(seg.decode("latin-1"))
         pos = m.end()
         word, num, hexb, ctrl, brace, _nl = m.groups()
         if brace == b"{":
+            uskip = 0
             depth += 1
             if skip_depth:
                 skip_depth += 1
@@ -97,22 +109,33 @@ def rtf_to_text(rtf: bytes) -> str:
                 if nxt.group(4) == b"*":
                     skip_depth = skip_depth or 1
         elif brace == b"}":
+            uskip = 0
             depth -= 1
             if skip_depth:
                 skip_depth -= 1
         elif skip_depth:
             continue
         elif hexb is not None:
+            if uskip > 0:
+                uskip -= 1  # this \'xx is the fallback for the preceding \uN
+                continue
             out.append(bytes.fromhex(hexb.decode()).decode("cp1252", errors="replace"))
         elif word is not None:
+            if word == b"uc" and num is not None:
+                uc = max(0, int(num))
+                continue
+            if word == b"u" and num is not None:
+                cp = int(num)
+                out.append(chr(cp + 65536 if cp < 0 else cp))
+                uskip = uc
+                continue
+            uskip = 0  # any other control word ends a pending substitution run
             if word in (b"par", b"line"):
                 out.append("\n")
             elif word == b"tab":
                 out.append("\t")
-            elif word == b"u" and num is not None:
-                cp = int(num)
-                out.append(chr(cp + 65536 if cp < 0 else cp))
         elif ctrl is not None:
+            uskip = 0
             if ctrl in (b"\\", b"{", b"}"):
                 out.append(ctrl.decode())
             elif ctrl == b"~":

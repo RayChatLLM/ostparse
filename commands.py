@@ -93,6 +93,14 @@ def _int_setting(cfg: Mapping[str, object], key: str) -> int:
         return int(DEFAULTS[key])  # type: ignore[call-overload]
 
 
+# The low 5 bits of a nid are its node type ([MS-PST] NID_TYPE). A normal mail
+# message is 0x04; folders (0x02), search folders (0x03) and tables are not
+# messages. `show` rejects non-message nids so a folder nid from `tree` cannot
+# open as a hollow, misleading "(empty)" IPM.Note.
+_NID_TYPE_MASK = 0x1F
+_NID_TYPE_NORMAL_MESSAGE = 0x04
+
+
 def _extract_flags(text: str) -> tuple[str, dict[str, object], str]:
     """Split ``--flag [value]`` options out of a query string.
 
@@ -127,7 +135,7 @@ def _opt_int(opts: Mapping[str, object], name: str, default: int) -> int:
     if raw is None:
         return default
     try:
-        return max(0, int(str(raw), 0))
+        return int(str(raw), 0)
     except ValueError:
         return -1
 
@@ -230,8 +238,20 @@ def _cmd_open(rest: str, state: MutableMapping[str, object]) -> str:
     if not os.path.isfile(path):
         return f"no such file: {path}"
     probe_state: dict[str, object] = {"file": path}
-    with _open_ost(probe_state) as ost:
-        info = ost.info()
+    # Probe into a throwaway dict and name the attempted path on failure, so a
+    # bad open never reports a previously-open file and leaves that store intact.
+    try:
+        with _open_ost(probe_state) as ost:
+            info = ost.info()
+    except KeyRequired as exc:
+        return (
+            f"cannot open {path}: {exc} — this store is WIP-encrypted (bCryptMethod 0x10); "
+            "decrypt it on its Windows host (cipher /d) and open the decrypted copy"
+        )
+    except (NotAnOSTFile, UnsupportedFormat, CorruptFile) as exc:
+        return f"cannot read {path}: {exc}"
+    except OSTError as exc:
+        return f"ostparse error reading {path}: {exc}"
     state.clear()
     state.update(probe_state)
     ix_dir = path + ".ostidx"
@@ -302,8 +322,10 @@ def _cmd_search(
         return "usage: %s QUERY — e.g. search from:alice \"budget review\" received:last month" % ("count" if count_only else "search")
     limit = _opt_int(opts, "limit", _int_setting(cfg, "limit"))
     offset = _opt_int(opts, "offset", 0)
-    if limit < 0 or offset < 0:
-        return "--limit and --offset take non-negative integers"
+    if limit < 1:
+        return "--limit takes a positive integer (use a large value to page through everything)"
+    if offset < 0:
+        return "--offset takes a non-negative integer"
     sort = str(opts.get("sort", "date"))
     if sort not in _SORT_KEYS:
         return "unknown sort %r; one of: %s" % (sort, " ".join(_SORT_KEYS))
@@ -377,6 +399,12 @@ def _cmd_show(rest: str, state: Mapping[str, object], cfg: Mapping[str, object])
     except ValueError:
         return f"not a message id: {text!r}; pass the nid=0x... value printed by search"
     with _open_ost(state) as ost:
+        if (nid & _NID_TYPE_MASK) != _NID_TYPE_NORMAL_MESSAGE:
+            return (
+                "nid=0x%x is not a message (node type 0x%02x; normal messages are type 0x04). "
+                "Folder/table nids printed by 'tree' are not messages — "
+                "pass a nid=0x... from 'search'." % (nid, nid & _NID_TYPE_MASK)
+            )
         try:
             msg = ost.message(nid)
             msg.subject  # noqa: B018 - force the property context open so a bad nid fails here
@@ -413,7 +441,34 @@ def _cmd_show(rest: str, state: Mapping[str, object], cfg: Mapping[str, object])
         return "\n".join(lines)
 
 
-def _cmd_export(rest: str, state: Mapping[str, object], cfg: Mapping[str, object], cancel: Callable[[], None] | None) -> str:
+def _resolve_export_dir(arg: str, workspace: object | None) -> tuple[str, str]:
+    """Resolve an export directory, confining it to the workspace when one is set.
+
+    Returns
+    -------
+    tuple[str, str]
+        ``(out_dir, "")`` when the path is allowed, or ``("", message)`` when it
+        escapes the session workspace and must be refused.
+    """
+    raw = os.path.expanduser(arg)
+    if workspace is None:
+        return os.path.abspath(raw), ""
+    root = os.path.abspath(os.path.expanduser(str(workspace)))
+    out_dir = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(root, raw))
+    try:
+        contained = os.path.commonpath([root, out_dir]) == root
+    except ValueError:
+        contained = False  # different drives on Windows
+    if not contained:
+        return "", (
+            f"export is confined to the session workspace ({root}); "
+            "choose a path inside it, e.g. export out from:alice "
+            "(reading/searching mailboxes still works anywhere on disk)"
+        )
+    return out_dir, ""
+
+
+def _cmd_export(rest: str, state: Mapping[str, object], cfg: Mapping[str, object], cancel: Callable[[], None] | None, workspace: object | None = None) -> str:
     from .ostparse.search import QueryError, Searcher, parse
 
     text, opts, err = _extract_flags(rest)
@@ -425,7 +480,9 @@ def _cmd_export(rest: str, state: Mapping[str, object], cfg: Mapping[str, object
         return f"could not parse arguments: {exc}"
     if len(tokens) < 2:
         return 'usage: export DIR QUERY [--limit N] — e.g. export ./out from:alice "budget" (or export ./out nid:0x200024)'
-    out_dir = os.path.abspath(os.path.expanduser(tokens[0]))
+    out_dir, deny = _resolve_export_dir(tokens[0], workspace)
+    if deny:
+        return deny
     query = text.split(None, 1)[1]
     cap = _opt_int(opts, "limit", _int_setting(cfg, "export_cap"))
     if cap <= 0:
@@ -512,7 +569,12 @@ def _cmd_digest(
             ):
                 if profile.docs is None:
                     break
-                facs = searcher.facets(profile.docs, kind, top=8)
+                # Date facets (month) sort chronologically; fetch them all and
+                # re-sort by count so "Busiest months" is actually the busiest
+                # (and never silently omits a later year).
+                facs = searcher.facets(profile.docs, kind, top=200 if kind == "month" else 8)
+                if kind == "month":
+                    facs = sorted(facs, key=lambda vc: (vc[1], vc[0]), reverse=True)[:8]
                 if facs:
                     lines.append("\n%s:" % label)
                     lines.extend("  %6d  %s" % (count, value) for value, count in facs)
@@ -544,11 +606,18 @@ def run(
     settings: Mapping[str, object] | None = None,
     state: MutableMapping[str, object] | None = None,
     cancel: Callable[[], None] | None = None,
+    workspace: object | None = None,
 ) -> str:
     """Return complete command output, including intact JSON for search --json.
 
     Search pages are bounded by --limit/--offset, never by character slicing.
     Legacy max_chars, body_chars and tree_lines settings are ignored.
+
+    When ``workspace`` is given (the RayChat session workspace), ``export`` may
+    only write inside it, so a read-only subagent that inherits this tool cannot
+    create files outside its sandbox. Opening/reading mailboxes is unaffected and
+    still works anywhere on disk. The standalone CLI passes no workspace and keeps
+    its unrestricted export behavior.
     """
     cfg: dict[str, object] = dict(DEFAULTS)
     cfg.update(settings or {})
@@ -584,7 +653,7 @@ def run(
         if sub == "show":
             return _cmd_show(rest, state, cfg)
         if sub == "export":
-            return _cmd_export(rest, state, cfg, cancel)
+            return _cmd_export(rest, state, cfg, cancel, workspace)
         if sub == "stats":
             return _cmd_stats(state, cancel)
         if sub == "digest":

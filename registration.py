@@ -33,7 +33,7 @@ def register(api: PluginRegistrar) -> None:
         if not isinstance(state, dict):
             state = {}
             ctx.state[_STATE_KEY] = state
-        return run(arguments, ctx.settings, state, ctx.check_cancelled)
+        return run(arguments, ctx.settings, state, ctx.check_cancelled, ctx.workspace)
 
     def command(arguments: str, ctx: PluginContext) -> str:
         result = _run(arguments or "", ctx)

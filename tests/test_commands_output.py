@@ -29,6 +29,8 @@ if _PKG not in sys.modules:
 commands = importlib.import_module(f"{_PKG}.commands")
 messaging = importlib.import_module(f"{_PKG}.ostparse.messaging")
 errors = importlib.import_module(f"{_PKG}.ostparse.errors")
+rtf = importlib.import_module(f"{_PKG}.ostparse.rtf")
+tokenize = importlib.import_module(f"{_PKG}.ostparse.search.tokenize")
 
 
 class OpenPasswordTests(unittest.TestCase):
@@ -112,7 +114,7 @@ class CommandOutputTests(unittest.TestCase):
         store = SimpleNamespace(message=lambda nid: message)
         with patch.object(commands, "_open_ost", return_value=nullcontext(store)):
             for flag in ("", " --full"):
-                result = commands.run("show 0x20 --headers" + flag,
+                result = commands.run("show 0x24 --headers" + flag,
                                       {"max_chars": 10, "body_chars": 5})
                 self.assertEqual(result.split("--- body ---\n", 1)[1], body)
                 self.assertIn("--- transport headers ---\n" + headers + "\n", result)
@@ -130,6 +132,72 @@ class CommandOutputTests(unittest.TestCase):
     def test_search_error_is_preserved_without_json_repair(self):
         with patch.object(commands, "_cmd_search", return_value="query error: invalid"):
             self.assertEqual(commands.run("search broken --json"), "query error: invalid")
+
+
+class QaRegressionTests(unittest.TestCase):
+    """Defects found by adversarial QA against the Enron corpus, locked down."""
+
+    def test_out_of_range_date_is_a_clean_query_error_not_a_traceback(self):
+        # Parsing happens before any store is opened, so no mailbox is needed.
+        for q in ("search date:2002-13-99", "count date:9999-99-99", "search received:2002-02-30"):
+            out = commands.run(q, state={})
+            self.assertIn("query error", out)
+            self.assertNotIn("Traceback", out)
+
+    def test_nonpositive_limit_is_rejected_not_silently_one(self):
+        self.assertIn("positive integer", commands.run("search * --limit 0", state={}))
+        self.assertIn("positive integer", commands.run("search * --limit -5", state={}))
+        self.assertIn("non-negative", commands.run("search * --offset -1", state={}))
+
+    def test_show_rejects_a_folder_nid_instead_of_a_hollow_message(self):
+        store = SimpleNamespace(message=lambda nid: SimpleNamespace())
+        with patch.object(commands, "_open_ost", return_value=nullcontext(store)):
+            out = commands.run("show 0x8202", state={})  # 0x8202 is a folder nid (type 0x02)
+            self.assertIn("is not a message", out)
+            self.assertNotIn("--- body ---", out)
+
+    def test_show_accepts_a_normal_message_nid(self):
+        message = SimpleNamespace(
+            subject="Hi", sender_name="", sender_email="", message_class="IPM.Note",
+            date=None, size=1, message_id=None, recipients=lambda: [],
+            attachments=lambda: [], transport_headers="", body_text=lambda: "body",
+        )
+        with patch.object(commands, "_open_ost", return_value=nullcontext(SimpleNamespace(message=lambda nid: message))):
+            out = commands.run("show 0x200244", state={})  # type 0x04
+            self.assertIn("--- body ---", out)
+
+    def test_failed_open_names_the_attempted_file(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ost", delete=False) as fh:
+            fh.write(b"not a mailbox")
+            path = fh.name
+        try:
+            out = commands.run(f"open {path}", state={})
+            self.assertIn(path, out)
+            self.assertIn("cannot read", out)
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+    def test_export_is_confined_to_the_workspace(self):
+        import os
+        out_dir, deny = commands._resolve_export_dir("/etc/outside_qa", "/ws")
+        self.assertEqual(out_dir, "")
+        self.assertIn("confined to the session workspace", deny)
+        inside, deny2 = commands._resolve_export_dir("out", "/ws")
+        self.assertEqual((inside, deny2), (os.path.join("/ws", "out"), ""))
+        # No workspace (standalone CLI) keeps the unrestricted behavior.
+        free, deny3 = commands._resolve_export_dir("/tmp/anywhere", None)
+        self.assertEqual(deny3, "")
+        self.assertTrue(free.endswith("/tmp/anywhere"))
+
+    def test_rtf_unicode_escape_is_not_doubled(self):
+        # 舗 is ' with an ANSI \'92 fallback that must be dropped (uc=1).
+        self.assertEqual(rtf.rtf_to_text(b"{\\rtf1\\ansi it\\u8217\\'92s\\par}"), "it’s")
+        self.assertEqual(rtf.rtf_to_text(b"{\\rtf1\\ansi plain only\\par}"), "plain only")
+
+    def test_html_keeps_stray_angle_brackets(self):
+        got = tokenize.html_to_text(b"<div>Price < 100 and qty > 5 units</div>")
+        self.assertEqual(got, "Price < 100 and qty > 5 units")
 
 
 if __name__ == "__main__":
