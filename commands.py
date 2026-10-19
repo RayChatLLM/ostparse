@@ -339,7 +339,12 @@ def _cmd_search(
             if not res.hits:
                 lines.append("(no matches — try fewer terms, wildcards like budg*, or 'help query')")
             else:
-                lines.append("use 'show NID' for a full message, 'search ... --offset %d' for the next page" % (offset + len(res.hits)))
+                note = "the indented line under each hit is a short preview, not the message body"
+                if not opts.get("no-snippets"):
+                    lines.append(note + " — run 'show NID' to read a message's full body (addresses, attachments and all)")
+                else:
+                    lines.append("run 'show NID' to read a message's full body (addresses, attachments and all)")
+                lines.append("next page: 'search ... --offset %d'" % (offset + len(res.hits)))
             if facet is not None and res.docs is not None:
                 top = _opt_int(opts, "top", 15)
                 lines.append(f"\n{facet} facets:")

@@ -1,6 +1,6 @@
 {
   "id": "ostparse",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "sdk": 4,
   "entrypoint": "__init__:register",
   "description": "Search and analyze email in Outlook OST/PST files directly on disk (pure Python [MS-PST] reader with a full-text sidecar index; no Outlook, no native dependencies; bounded memory, 10 GB+ stores are fine).",
