@@ -399,7 +399,14 @@ def _cmd_show(rest: str, state: Mapping[str, object], cfg: Mapping[str, object])
             headers = msg.transport_headers or "(no transport headers)"
             lines.append("--- transport headers ---")
             lines.append(headers)
-        body = msg.body_text() or msg.body or ""
+        # Use the same body extraction the full-text index uses: plain-text
+        # PR_BODY, else RTF-to-text, else HTML-to-text. Many real emails (the
+        # Outlook/OneDrive welcome mail, most newsletters) carry their content
+        # only in the HTML body, so a plain-text-only read reported "(empty)"
+        # for a message that in fact had 16 KB of readable text.
+        from .ostparse.search.extract import _message_text
+
+        body = _message_text(msg)
         lines.append("--- body ---")
         lines.append(body if body else "(empty)")
         return "\n".join(lines)
