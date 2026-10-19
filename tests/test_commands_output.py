@@ -1,12 +1,32 @@
 """Regression coverage for complete command output and JSON transport."""
 
+import importlib
+import importlib.util
 import json
+import sys
 import unittest
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from ostparse_raychat import commands
+# Import the plugin package by location so the tests run from any layout — the
+# installed working copy (``.../ostparse_raychat``) and a bare ``git clone``
+# whose checkout directory is the package root (CI). Relative imports inside the
+# package need a real package name, so register one pointing at this directory.
+_PKG = "ostparse_raychat"
+if _PKG not in sys.modules:
+    _root = Path(__file__).resolve().parent.parent
+    _spec = importlib.util.spec_from_file_location(
+        _PKG, _root / "__init__.py", submodule_search_locations=[str(_root)]
+    )
+    if _spec is None or _spec.loader is None:  # pragma: no cover - defensive
+        raise ImportError(f"cannot locate {_PKG} package at {_root}")
+    _module = importlib.util.module_from_spec(_spec)
+    sys.modules[_PKG] = _module
+    _spec.loader.exec_module(_module)
+
+commands = importlib.import_module(f"{_PKG}.commands")
 
 
 class CommandOutputTests(unittest.TestCase):
