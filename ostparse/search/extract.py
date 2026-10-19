@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Set
 from .. import props as P
 from ..errors import OSTError
 from ..messaging import Message
-from .tokenize import address_tokens, html_to_text, token_set, tokenize
+from .tokenize import address_tokens, token_set, tokenize
 from zlib import crc32 as _crc32
 
 BIGRAM_BITS = 20
@@ -120,35 +120,12 @@ class Document:
 
 
 def _message_text(msg: Message) -> str:
-    """Plain-text body: PR_BODY, else RTF -> text, else HTML -> text."""
-    try:
-        body = msg.body
-    except OSTError:
-        body = ""
-    if body:
-        return body
-    try:
-        rtf = msg.rtf
-    except OSTError:
-        rtf = None
-    if rtf:
-        try:
-            from ..rtf import rtf_to_text
-            t = rtf_to_text(rtf)
-            if t:
-                return t
-        except Exception:
-            pass
-    try:
-        html = msg.html
-    except OSTError:
-        html = None
-    if html:
-        try:
-            return html_to_text(html)
-        except Exception:
-            return ""
-    return ""
+    """Readable body text (PR_BODY, else RTF, else HTML).
+
+    Delegates to the canonical ``Message.body_text()`` so the full-text index
+    and the ``show`` command always extract a message body the same way.
+    """
+    return msg.body_text()
 
 
 def extract(msg: Message, folder_id: int, folder_path: str, *, depth: int = 0) -> Document:

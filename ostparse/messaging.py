@@ -267,13 +267,42 @@ class Message:
             return None
 
     def body_text(self) -> str:
-        """Best-effort plain-text body: PR_BODY, else RTF converted to text."""
-        b = self.body
+        """Best-effort readable text body: PR_BODY, else RTF->text, else HTML->text.
+
+        HTML-only mail (the common case for newsletters and service messages)
+        has no PR_BODY and no RTF, so without the HTML fallback this returned ""
+        for a message that in fact has a full readable body. Every caller --
+        the plugin's ``show`` and any code driving the library directly -- needs
+        the same best-effort text, so the fallback lives here, not in callers.
+        """
+        try:
+            b = self.body
+        except OSTError:
+            b = ""
         if b:
             return b
-        r = self.rtf
+        try:
+            r = self.rtf
+        except OSTError:
+            r = None
         if r:
-            return rtf_to_text(r)
+            try:
+                text = rtf_to_text(r)
+            except Exception:  # noqa: BLE001 - a bad RTF stream must not hide HTML
+                text = ""
+            if text:
+                return text
+        try:
+            h = self.html
+        except OSTError:
+            h = None
+        if h:
+            from .search.tokenize import html_to_text
+
+            try:
+                return html_to_text(h)
+            except Exception:  # noqa: BLE001 - never raise from a best-effort read
+                return ""
         return ""
 
     @property
