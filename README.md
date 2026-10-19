@@ -44,7 +44,7 @@ with `/plugins disable|enable|uninstall ostparse`.
 
 | Command | Does |
 | --- | --- |
-| `open FILE` | Select the store for this session (path is remembered in session state); reads any OST/PST whether or not it carries an open-password |
+| `open FILE` | Select the store for this session (path is remembered in session state); reads any OST/PST directly, no password needed |
 | `close` | Forget the open store |
 | `info` | Header/format details as JSON |
 | `tree` | Folder hierarchy with message counts and `nid`s |
@@ -73,14 +73,16 @@ results; snippets remain search previews, not full message bodies. `show` return
 the complete available text body, and `tree` includes every folder. Legacy
 `max_chars`, `body_chars`, and `tree_lines` settings are accepted but ignored.
 
-Notes for operators: no password is ever needed. An OST/PST "open password"
-(`PidTagPstPassword`) is only a weak CRC-32 that gates Outlook's own UI — it
-does not encrypt the store — so `open FILE` reads the content either way and
-simply reports `password_protected` in `open`/`info`. (A genuinely encrypted
-store — Windows Information Protection, `bCryptMethod` 0x10 — is different and
-is reported with guidance to decrypt it on its Windows host.) Outlook holds its
-live OST open exclusively — work on a copy or close Outlook. Searching reads
-only the index; `show`/`export` open the store file.
+Notes for operators: no password is ever needed or accepted — `open FILE` reads
+the content directly, and the plugin does not prompt for or warn about
+passwords. An OST/PST "open password" (`PidTagPstPassword`) is only a weak
+CRC-32 that gates Outlook's own UI and does not encrypt the store; the factual
+`password_protected` flag is still reported by `info` for anyone who needs it,
+but it never affects reading. (A genuinely encrypted store — Windows Information
+Protection, `bCryptMethod` 0x10 — is different and is reported with guidance to
+decrypt it on its Windows host.) Outlook holds its live OST open exclusively —
+work on a copy or close Outlook. Searching reads only the index; `show`/`export`
+open the store file.
 
 ## Verification walkthrough (isolated workspace)
 

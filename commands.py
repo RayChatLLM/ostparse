@@ -235,14 +235,11 @@ def _cmd_open(rest: str, state: MutableMapping[str, object]) -> str:
     state.update(probe_state)
     ix_dir = path + ".ostidx"
     indexed = "an index exists and will be updated on first search" if os.path.isdir(ix_dir) else "first search builds the index"
-    pw_note = (
-        "\nnote: the store records an open-password, but that only gates Outlook's UI — it does not"
-        " encrypt the data, so ostparse reads it regardless."
-        if info.get("password_protected")
-        else ""
-    )
+    # No password note here: an OST/PST open-password never blocks reading, so
+    # mentioning it only makes users think one is required. The factual flag
+    # stays available in `info` (password_protected) for anyone who needs it.
     return (
-        "opened %s\nkind=%s layout=%s crypt=%s size=%s name=%r%s\n%s (sidecar %s). Try: search QUERY | tree | info"
+        "opened %s\nkind=%s layout=%s crypt=%s size=%s name=%r\n%s (sidecar %s). Try: search QUERY | tree | info"
         % (
             path,
             info.get("kind", "?"),
@@ -250,7 +247,6 @@ def _cmd_open(rest: str, state: MutableMapping[str, object]) -> str:
             info.get("crypt", "?"),
             _human_size(os.path.getsize(path)),
             info.get("display_name", ""),
-            pw_note,
             indexed,
             ix_dir,
         )
